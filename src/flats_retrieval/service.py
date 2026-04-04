@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from urllib.parse import urlparse
 
 from camoufox.async_api import AsyncCamoufox
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from flats_retrieval.config import Settings
 from flats_retrieval.models import FlatListing, SearchConfig
@@ -156,6 +157,8 @@ class FlatMonitorService:
                     continue
                 await self._telegram.send_listing(search.chat_id, enriched)
                 self._remember_listing(search.chat_id, enriched)
+            except PlaywrightTimeoutError:
+                LOGGER.warning("Timed out loading listing %s", listing.link)
             except Exception:
                 LOGGER.exception("Failed to process listing %s", listing.link)
             finally:

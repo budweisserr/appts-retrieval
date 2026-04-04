@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from flats_retrieval.models import FlatListing, SearchConfig
 
@@ -29,8 +30,7 @@ class OlxScraper(FlatScraper):
         return "olx.pl" in urlparse(url).netloc
 
     async def fetch_search_results(self, page, search: SearchConfig, limit: int) -> list[FlatListing]:
-        await page.goto(search.url, wait_until="domcontentloaded")
-        await page.wait_for_load_state("networkidle")
+        await _goto_with_retry(page, search.url)
         soup = BeautifulSoup(await page.content(), "html.parser")
         listings: list[FlatListing] = []
         seen_links: set[str] = set()
@@ -67,8 +67,7 @@ class OlxScraper(FlatScraper):
         return listings
 
     async def enrich_listing(self, page, listing: FlatListing) -> FlatListing:
-        await page.goto(listing.link, wait_until="domcontentloaded")
-        await page.wait_for_load_state("networkidle")
+        await _goto_with_retry(page, listing.link)
         soup = BeautifulSoup(await page.content(), "html.parser")
 
         czynsz = _extract_olx_czynsz(soup)
@@ -93,8 +92,7 @@ class OtodomScraper(FlatScraper):
         return "otodom.pl" in urlparse(url).netloc
 
     async def fetch_search_results(self, page, search: SearchConfig, limit: int) -> list[FlatListing]:
-        await page.goto(search.url, wait_until="domcontentloaded")
-        await page.wait_for_load_state("networkidle")
+        await _goto_with_retry(page, search.url)
         soup = BeautifulSoup(await page.content(), "html.parser")
         listings: list[FlatListing] = []
         seen_links: set[str] = set()
@@ -129,8 +127,7 @@ class OtodomScraper(FlatScraper):
         return listings
 
     async def enrich_listing(self, page, listing: FlatListing) -> FlatListing:
-        await page.goto(listing.link, wait_until="domcontentloaded")
-        await page.wait_for_load_state("networkidle")
+        await _goto_with_retry(page, listing.link)
         soup = BeautifulSoup(await page.content(), "html.parser")
 
         listing.title = _clean(soup.find("h1").get_text(" ", strip=True)) if soup.find("h1") else listing.title
@@ -157,6 +154,14 @@ def get_scraper_for_url(url: str) -> FlatScraper:
         if scraper.supports(url):
             return scraper
     raise ValueError(f"Unsupported search URL: {url}")
+
+
+async def _goto_with_retry(page, url: str) -> None:
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+        await page.wait_for_load_state("networkidle", timeout=30_000)
+    except PlaywrightTimeoutError:
+        await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
 
 
 def _extract_id_from_url(url: str) -> str:
