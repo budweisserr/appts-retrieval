@@ -13,12 +13,13 @@ class TelegramClient:
         self,
         bot_token: str,
         *,
+        read_timeout_seconds: int,
         max_photos_per_message: int,
     ) -> None:
         self._max_photos_per_message = max_photos_per_message
         self._client = httpx.AsyncClient(
             base_url=f"https://api.telegram.org/bot{bot_token}/",
-            timeout=30.0,
+            timeout=httpx.Timeout(connect=10.0, read=float(read_timeout_seconds), write=30.0, pool=30.0),
         )
 
     async def close(self) -> None:
