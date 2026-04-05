@@ -6,7 +6,7 @@ Small Python service that runs as a Telegram bot, accepts your rent search URLs 
 
 - works through Telegram commands and messages
 - uses your own search URLs, so all preferences stay in the website filters
-- polls every 15 seconds by default
+- polls every 20 seconds by default
 - uses Camoufox for browser anti-detection
 - stores per-chat search URLs and seen listing IDs in SQLite so flats are not sent twice
 - opens new listings, extracts title, price, location, description, photos, and direct link
@@ -81,5 +81,7 @@ If your VPS user is not `ubuntu`, change `User=` in the service file.
 - If you send new links later, the bot replaces the old active searches for that chat.
 - The bot requires exactly one OLX search URL and one Otodom search URL.
 - Supported commands: `/start`, `/status`, `/clear`.
-- `POLL_INTERVAL_SECONDS=15` is aggressive. Even with Camoufox, sites can still rate limit or change markup.
+- For small VPS instances (1 vCPU / 1 GB RAM), keep `BLOCK_IMAGES=1`, `HUMANIZE=0`, `MAX_NEW_LISTINGS_PER_CYCLE=4`, and `MAX_LISTINGS_PER_SEARCH=12`.
+- `POLL_INTERVAL_SECONDS=20` is already aggressive. Lower values increase CPU, RAM, and timeout risk.
+- `TELEGRAM_READ_TIMEOUT_SECONDS` should stay higher than `TELEGRAM_POLL_TIMEOUT_SECONDS`.
 - The parser is intentionally lightweight and may need selector updates if OLX or Otodom changes page structure.
