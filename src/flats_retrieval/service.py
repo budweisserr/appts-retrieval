@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from urllib.parse import urlparse
 
 from camoufox.async_api import AsyncCamoufox
+import httpx
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from flats_retrieval.config import Settings
@@ -24,6 +25,7 @@ class FlatMonitorService:
         self._storage = SeenStorage(settings.state_db_path)
         self._telegram = TelegramClient(
             settings.telegram_bot_token,
+            read_timeout_seconds=settings.telegram_read_timeout_seconds,
             max_photos_per_message=settings.max_photos_per_message,
         )
 
@@ -31,8 +33,9 @@ class FlatMonitorService:
         try:
             async with AsyncCamoufox(
                 headless="virtual" if self._settings.headless else False,
-                humanize=1.2,
+                humanize=1.2 if self._settings.humanize else False,
                 block_webrtc=True,
+                block_images=self._settings.block_images,
                 locale=["pl-PL", "pl"],
                 os=["windows", "macos", "linux"],
             ) as browser:
@@ -57,6 +60,8 @@ class FlatMonitorService:
                     offset=offset,
                     timeout=self._settings.telegram_poll_timeout_seconds,
                 )
+            except httpx.ReadTimeout:
+                continue
             except Exception:
                 LOGGER.exception("Failed to fetch Telegram updates")
                 await asyncio.sleep(2)
@@ -144,25 +149,35 @@ class FlatMonitorService:
                         search.chat_id, search.url)
             return
 
+        if len(fresh) > self._settings.max_new_listings_per_cycle:
+            LOGGER.info(
+                "Limiting processing to %s newest listings for chat=%s url=%s",
+                self._settings.max_new_listings_per_cycle,
+                search.chat_id,
+                search.url,
+            )
+            fresh = fresh[: self._settings.max_new_listings_per_cycle]
+
         LOGGER.info("Found %s new flats for chat=%s url=%s",
                     len(fresh), search.chat_id, search.url)
-        for listing in fresh:
-            detail_page = await browser.new_page()
-            try:
-                enriched = await scraper.enrich_listing(detail_page, listing)
-                if not _is_recent_listing(enriched):
+        detail_page = await browser.new_page()
+        try:
+            for listing in fresh:
+                try:
+                    enriched = await scraper.enrich_listing(detail_page, listing)
+                    if not _is_recent_listing(enriched):
+                        self._remember_listing(search.chat_id, enriched)
+                        LOGGER.info("Skipping stale listing %s dated %s",
+                                    enriched.link, enriched.published_at)
+                        continue
+                    await self._telegram.send_listing(search.chat_id, enriched)
                     self._remember_listing(search.chat_id, enriched)
-                    LOGGER.info("Skipping stale listing %s dated %s",
-                                enriched.link, enriched.published_at)
-                    continue
-                await self._telegram.send_listing(search.chat_id, enriched)
-                self._remember_listing(search.chat_id, enriched)
-            except PlaywrightTimeoutError:
-                LOGGER.warning("Timed out loading listing %s", listing.link)
-            except Exception:
-                LOGGER.exception("Failed to process listing %s", listing.link)
-            finally:
-                await detail_page.close()
+                except PlaywrightTimeoutError:
+                    LOGGER.warning("Timed out loading listing %s", listing.link)
+                except Exception:
+                    LOGGER.exception("Failed to process listing %s", listing.link)
+        finally:
+            await detail_page.close()
 
     def _remember_listing(self, chat_id: str, listing: FlatListing) -> None:
         self._storage.add(
