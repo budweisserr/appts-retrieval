@@ -158,26 +158,47 @@ class FlatMonitorService:
             )
             fresh = fresh[: self._settings.max_new_listings_per_cycle]
 
-        LOGGER.info("Found %s new flats for chat=%s url=%s",
+        LOGGER.info("Found %s unseen flats for chat=%s url=%s",
                     len(fresh), search.chat_id, search.url)
         detail_page = await browser.new_page()
+        posted_count = 0
+        skipped_old_count = 0
+        timeout_count = 0
+        error_count = 0
         try:
             for listing in fresh:
                 try:
                     enriched = await scraper.enrich_listing(detail_page, listing)
                     if not _is_recent_listing(enriched):
                         self._remember_listing(search.chat_id, enriched)
-                        LOGGER.info("Skipping stale listing %s dated %s",
-                                    enriched.link, enriched.published_at)
+                        skipped_old_count += 1
+                        LOGGER.info(
+                            "Skipping old listing %s (published_at=%s)",
+                            enriched.link,
+                            enriched.published_at,
+                        )
                         continue
                     await self._telegram.send_listing(search.chat_id, enriched)
                     self._remember_listing(search.chat_id, enriched)
+                    posted_count += 1
                 except PlaywrightTimeoutError:
+                    timeout_count += 1
                     LOGGER.warning("Timed out loading listing %s", listing.link)
                 except Exception:
+                    error_count += 1
                     LOGGER.exception("Failed to process listing %s", listing.link)
         finally:
             await detail_page.close()
+
+        LOGGER.info(
+            "Search summary chat=%s url=%s: posted=%s skipped_old=%s timeouts=%s errors=%s",
+            search.chat_id,
+            search.url,
+            posted_count,
+            skipped_old_count,
+            timeout_count,
+            error_count,
+        )
 
     def _remember_listing(self, chat_id: str, listing: FlatListing) -> None:
         self._storage.add(
