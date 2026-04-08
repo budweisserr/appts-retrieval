@@ -81,6 +81,6 @@ You can tune further in `.env`, but lower intervals increase request pressure an
 - `TELEGRAM_READ_TIMEOUT_SECONDS` (default: `65`)
 - `MAX_LISTINGS_PER_SEARCH` (default: `25`, `0` means no cap)
 - `MAX_NEW_LISTINGS_PER_CYCLE` (default: `6`, `0` means no cap)
-- `MAX_PHOTOS_PER_MESSAGE` (default: `3`)
+- `MAX_PHOTOS_PER_MESSAGE` (default: `5`, `0` means no cap)
 - `SEED_EXISTING_ON_START` (default: `1`)
 - `STATE_DB_PATH` (default: `data/flats.db`)
