@@ -82,6 +82,7 @@ class TelegramClient:
         response.raise_for_status()
 
     def _build_caption(self, listing: FlatListing) -> str:
+        escaped_link = html.escape(listing.link, quote=True)
         lines = [
             f"<b>{html.escape(listing.title)}</b>",
             f"<b>Price:</b> {html.escape(listing.price or 'brak')}",
@@ -96,12 +97,5 @@ class TelegramClient:
                 lines.append(
                     f"<b>{html.escape(key)}:</b> {html.escape(value)}")
 
-        lines.append(f'<a href="{html.escape(
-            listing.link, quote=True)}">Link</a>')
+        lines.append(f'<a href="{escaped_link}">Link</a>')
         return "\n".join(lines)
-
-
-def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
