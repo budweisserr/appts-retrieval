@@ -84,25 +84,20 @@ class TelegramClient:
     def _build_caption(self, listing: FlatListing) -> str:
         lines = [
             f"<b>{html.escape(listing.title)}</b>",
-            f"<b>Cena:</b> {html.escape(listing.price or 'brak')}",
+            f"<b>Price:</b> {html.escape(listing.price or 'brak')}",
         ]
 
         if listing.location:
             lines.append(
-                f"<b>Lokalizacja:</b> {html.escape(listing.location)}")
+                f"<b>Location:</b> {html.escape(listing.location)}")
 
         for key, value in listing.details.items():
             if value:
                 lines.append(
                     f"<b>{html.escape(key)}:</b> {html.escape(value)}")
 
-        if listing.description:
-            lines.append("")
-            lines.append(html.escape(_truncate(listing.description, 900)))
-
-        lines.append("")
         lines.append(f'<a href="{html.escape(
-            listing.link, quote=True)}">Otwórz ogłoszenie</a>')
+            listing.link, quote=True)}">Link</a>')
         return "\n".join(lines)
 
 
