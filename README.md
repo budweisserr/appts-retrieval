@@ -1,87 +1,86 @@
-# flats-retrieval
+# appts-retrieval
 
-Small Python service that runs as a Telegram bot, accepts your rent search URLs from `olx.pl` and `otodom.pl`, deduplicates listings, and sends only new flats back to the same chat.
+Fast Telegram bot that watches OLX and Otodom rental searches and sends only newly listed flats.
 
-## What it does
+## Goals
 
-- works through Telegram commands and messages
-- uses your own search URLs, so all preferences stay in the website filters
-- polls every 20 seconds by default
-- uses Camoufox for browser anti-detection
-- stores per-chat search URLs and seen listing IDs in SQLite so flats are not sent twice
-- opens new listings, extracts title, price, location, description, photos, and direct link
-- sends the result back into the same Telegram chat that configured the search
+- notify as quickly as possible after a flat appears in search results
+- preserve your website filters by using your own OLX and Otodom links
+- avoid duplicates with SQLite-based per-chat dedupe
+- keep runtime lightweight (no browser)
 
-## Setup
+## Project structure
 
-1. Activate the virtualenv.
+The code lives under `src/` using a clean package layout:
+
+- `src/service.py` - orchestration and polling loops
+- `src/scrapers.py` - OLX/Otodom extraction and enrichment
+- `src/telegram.py` - Telegram API client
+- `src/storage.py` - SQLite persistence
+- `src/urls.py` - URL extraction/validation
+- `src/messages.py` - bot message templates
+- `src/config.py` - env-based configuration
+
+## Setup with PDM
+
+1. Install PDM.
 2. Install dependencies:
 
 ```bash
-pip install -e .
-playwright install firefox
-camoufox fetch
+pdm install
 ```
 
-3. Create `.env` from `.env.example`.
-4. Start a chat with your bot in Telegram.
-5. Send `/start`.
-6. Send exactly 2 search URLs: one from OLX and one from Otodom.
-
-Example message to the bot:
-
-```text
-https://www.olx.pl/nieruchomosci/mieszkania/wynajem/warszawa/?search%5Bfilter_float_price%3Ato%5D=3500
-https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/mazowieckie/warszawa/warszawa/warszawa?priceMax=3500
-```
+3. Create `.env` from `.env.example` and set `TELEGRAM_BOT_TOKEN`.
 
 ## Run
 
 ```bash
-python -m flats_retrieval
+pdm run appts-retrieval
 ```
 
-Or with the console script:
+or:
 
 ```bash
-flats-retrieval
+pdm run python -m appt_retrieval
 ```
 
-## VPS Deploy
+## Telegram usage
 
-The bot is already set up for headless VPS usage because it launches Camoufox with virtual headless mode.
+1. Send `/start`.
+2. Send exactly two links: one OLX and one Otodom.
 
-Example Ubuntu VPS setup:
+Example:
 
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip xvfb libgtk-3-0 libdbus-glib-1-2 libasound2t64
-git clone <your-repo-url> /opt/flats-retrieval
-cd /opt/flats-retrieval
-python3 -m venv venv
-./venv/bin/pip install -e .
-./venv/bin/playwright install firefox
-./venv/bin/camoufox fetch
+```text
+https://www.olx.pl/nieruchomosci/mieszkania/wynajem/<city>/?search%5Bfilter_float_price%3Ato%5D=2500
+https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/<city>?priceMax=2500
 ```
 
-Then create `/opt/flats-retrieval/.env`, adjust `deploy/flats-retrieval.service`, and install the service:
+Commands:
 
-```bash
-sudo cp deploy/flats-retrieval.service /etc/systemd/system/flats-retrieval.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now flats-retrieval
-sudo systemctl status flats-retrieval
-```
+- `/status` - show active links
+- `/clear` - remove active links
 
-If your VPS user is not `ubuntu`, change `User=` in the service file.
+## Speed tuning for very fresh flats
 
-## Notes
+Default values are already tuned for quick notifications:
 
-- `SEED_EXISTING_ON_START=1` means the first run will remember current results without sending them, then only notify about newly appearing flats.
-- If you send new links later, the bot replaces the old active searches for that chat.
-- The bot requires exactly one OLX search URL and one Otodom search URL.
-- Supported commands: `/start`, `/status`, `/clear`.
-- For small VPS instances (1 vCPU / 1 GB RAM), keep `BLOCK_IMAGES=1`, `HUMANIZE=0`, `MAX_NEW_LISTINGS_PER_CYCLE=4`, and `MAX_LISTINGS_PER_SEARCH=12`.
-- `POLL_INTERVAL_SECONDS=20` is already aggressive. Lower values increase CPU, RAM, and timeout risk.
-- `TELEGRAM_READ_TIMEOUT_SECONDS` should stay higher than `TELEGRAM_POLL_TIMEOUT_SECONDS`.
-- The parser is intentionally lightweight and may need selector updates if OLX or Otodom changes page structure.
+- `POLL_INTERVAL_SECONDS=8`
+- `MAX_PARALLEL_SEARCHES=2`
+- `MAX_PARALLEL_ENRICHMENTS=4`
+
+You can tune further in `.env`, but lower intervals increase request pressure and timeout risk.
+
+## Environment variables
+
+- `TELEGRAM_BOT_TOKEN` (required)
+- `POLL_INTERVAL_SECONDS` (default: `8`, minimum enforced: `3`)
+- `MAX_PARALLEL_SEARCHES` (default: `2`)
+- `MAX_PARALLEL_ENRICHMENTS` (default: `4`)
+- `TELEGRAM_POLL_TIMEOUT_SECONDS` (default: `20`)
+- `TELEGRAM_READ_TIMEOUT_SECONDS` (default: `65`)
+- `MAX_LISTINGS_PER_SEARCH` (default: `25`, `0` means no cap)
+- `MAX_NEW_LISTINGS_PER_CYCLE` (default: `6`, `0` means no cap)
+- `MAX_PHOTOS_PER_MESSAGE` (default: `3`)
+- `SEED_EXISTING_ON_START` (default: `1`)
+- `STATE_DB_PATH` (default: `data/flats.db`)
