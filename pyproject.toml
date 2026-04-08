@@ -1,24 +1,24 @@
 [project]
-name = "flats-retrieval"
+name = "appts-retrieval"
 version = "0.1.0"
 description = "Poll OLX and Otodom rent listings and forward new flats to Telegram"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "beautifulsoup4>=4.12.3",
-  "camoufox>=0.4.11",
   "httpx>=0.28.1",
 ]
 
 [project.scripts]
-flats-retrieval = "flats_retrieval.__main__:main"
+appts-retrieval = "cli:main"
 
 [build-system]
-requires = ["setuptools>=80.0"]
-build-backend = "setuptools.build_meta"
+requires = ["pdm-backend>=2.4.0"]
+build-backend = "pdm.backend"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[tool.pdm]
+distribution = true
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.pdm.build]
+package-dir = "src"
+includes = ["src"]

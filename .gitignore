@@ -13,3 +13,5 @@ build/
 dist/
 *.egg-info/
 data/
+__pypackages__/
+.pdm-python

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from flats_retrieval.models import SearchConfig
+from models import SearchConfig
 
 
 class SeenStorage:
@@ -48,8 +48,10 @@ class SeenStorage:
         self._connection.commit()
 
     def _ensure_seen_flats_schema(self) -> None:
-        columns = self._connection.execute("PRAGMA table_info(seen_flats)").fetchall()
-        primary_key_columns = [column[1] for column in columns if column[5] > 0]
+        columns = self._connection.execute(
+            "PRAGMA table_info(seen_flats)").fetchall()
+        primary_key_columns = [column[1]
+                               for column in columns if column[5] > 0]
         if primary_key_columns == ["chat_id", "dedupe_key"]:
             return
 
@@ -74,13 +76,16 @@ class SeenStorage:
             "SELECT chat_id, url, source, is_seeded FROM chat_searches ORDER BY created_at ASC"
         ).fetchall()
         return [
-            SearchConfig(chat_id=row[0], url=row[1], source=row[2], is_seeded=bool(row[3]))
+            SearchConfig(chat_id=row[0], url=row[1],
+                         source=row[2], is_seeded=bool(row[3]))
             for row in rows
         ]
 
     def replace_searches(self, chat_id: str, searches: list[SearchConfig]) -> None:
-        self._connection.execute("DELETE FROM chat_searches WHERE chat_id = ?", (chat_id,))
-        self._connection.execute("DELETE FROM seen_flats WHERE chat_id = ?", (chat_id,))
+        self._connection.execute(
+            "DELETE FROM chat_searches WHERE chat_id = ?", (chat_id,))
+        self._connection.execute(
+            "DELETE FROM seen_flats WHERE chat_id = ?", (chat_id,))
         for search in searches:
             self._connection.execute(
                 """

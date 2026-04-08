@@ -5,7 +5,7 @@ import json
 
 import httpx
 
-from flats_retrieval.models import FlatListing
+from models import FlatListing
 
 
 class TelegramClient:
@@ -19,7 +19,8 @@ class TelegramClient:
         self._max_photos_per_message = max_photos_per_message
         self._client = httpx.AsyncClient(
             base_url=f"https://api.telegram.org/bot{bot_token}/",
-            timeout=httpx.Timeout(connect=10.0, read=float(read_timeout_seconds), write=30.0, pool=30.0),
+            timeout=httpx.Timeout(connect=10.0, read=float(
+                read_timeout_seconds), write=30.0, pool=30.0),
         )
 
     async def close(self) -> None:
@@ -81,28 +82,20 @@ class TelegramClient:
         response.raise_for_status()
 
     def _build_caption(self, listing: FlatListing) -> str:
+        escaped_link = html.escape(listing.link, quote=True)
         lines = [
             f"<b>{html.escape(listing.title)}</b>",
-            f"<b>Cena:</b> {html.escape(listing.price or 'brak')}",
+            f"<b>Price:</b> {html.escape(listing.price or 'brak')}",
         ]
 
         if listing.location:
-            lines.append(f"<b>Lokalizacja:</b> {html.escape(listing.location)}")
+            lines.append(
+                f"<b>Location:</b> {html.escape(listing.location)}")
 
         for key, value in listing.details.items():
             if value:
-                lines.append(f"<b>{html.escape(key)}:</b> {html.escape(value)}")
+                lines.append(
+                    f"<b>{html.escape(key)}:</b> {html.escape(value)}")
 
-        if listing.description:
-            lines.append("")
-            lines.append(html.escape(_truncate(listing.description, 900)))
-
-        lines.append("")
-        lines.append(f'<a href="{html.escape(listing.link, quote=True)}">Otwórz ogłoszenie</a>')
+        lines.append(f'<a href="{escaped_link}">Link</a>')
         return "\n".join(lines)
-
-
-def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
