@@ -6,9 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/flats-retrieval
-EnvironmentFile=/opt/flats-retrieval/.env
-ExecStart=/opt/flats-retrieval/venv/bin/python -m flats_retrieval
+WorkingDirectory=/opt/appts-retrieval
+EnvironmentFile=/opt/appts-retrieval/.env
+ExecStart=/opt/appts-retrieval/venv/bin/python -m flats_retrieval
 Restart=always
 RestartSec=10
 
