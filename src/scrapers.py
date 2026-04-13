@@ -5,15 +5,17 @@ import json
 import re
 from collections import OrderedDict
 from datetime import date, timedelta
-from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup, Tag
 import httpx
 
+from fetchers import SearchClient
 from models import FlatListing, SearchConfig
 
 OLX_BASE_URL = "https://www.olx.pl"
 OTODOM_BASE_URL = "https://www.otodom.pl"
+MAX_SEARCH_PAGES = 50
 
 
 class FlatScraper:
@@ -22,13 +24,13 @@ class FlatScraper:
 
     async def fetch_search_results(
         self,
-        client: httpx.AsyncClient,
+        client: SearchClient,
         search: SearchConfig,
         limit: int,
     ) -> list[FlatListing]:
         raise NotImplementedError
 
-    async def enrich_listing(self, client: httpx.AsyncClient, listing: FlatListing) -> FlatListing:
+    async def enrich_listing(self, client: SearchClient, listing: FlatListing) -> FlatListing:
         raise NotImplementedError
 
 
@@ -38,43 +40,72 @@ class OlxScraper(FlatScraper):
 
     async def fetch_search_results(
         self,
-        client: httpx.AsyncClient,
+        client: SearchClient,
         search: SearchConfig,
         limit: int,
     ) -> list[FlatListing]:
-        html = await _fetch_html(client, search.url)
-        soup = BeautifulSoup(html, "html.parser")
         listings: list[FlatListing] = []
         seen_links: set[str] = set()
+        visited_pages: set[str] = set()
+        next_page_url: str | None = search.url
 
-        for link, title in _extract_olx_search_candidates(soup, html):
-            canonical = _canonicalize_listing_url(link)
-            if urlparse(canonical).netloc not in {"www.olx.pl", "olx.pl"}:
-                continue
-            if canonical in seen_links:
-                continue
+        while next_page_url and len(visited_pages) < MAX_SEARCH_PAGES and not _should_stop(listings, limit):
+            page_url = _canonicalize_search_url(next_page_url)
+            if page_url in visited_pages:
+                break
+            visited_pages.add(page_url)
 
-            external_id = _extract_id_from_url(
-                canonical) or _extract_olx_external_id(canonical)
-            if not external_id or not title:
-                continue
+            html = await _fetch_html(client, page_url)
+            soup = BeautifulSoup(html, "html.parser")
+            added_on_page = 0
 
-            listings.append(
-                FlatListing(
-                    source="olx",
-                    external_id=external_id,
-                    title=title,
-                    price="",
-                    link=canonical,
+            for link, title in _extract_olx_search_candidates(soup, html):
+                canonical = _canonicalize_listing_url(link)
+                if urlparse(canonical).netloc not in {"www.olx.pl", "olx.pl"}:
+                    continue
+                if canonical in seen_links:
+                    continue
+
+                external_id = _extract_id_from_url(
+                    canonical) or _extract_olx_external_id(canonical)
+                if not external_id or not title:
+                    continue
+
+                listings.append(
+                    FlatListing(
+                        source="olx",
+                        external_id=external_id,
+                        title=title,
+                        price="",
+                        link=canonical,
+                    )
                 )
-            )
-            seen_links.add(canonical)
+                seen_links.add(canonical)
+                added_on_page += 1
+
+                if _should_stop(listings, limit):
+                    break
+
             if _should_stop(listings, limit):
                 break
 
+            detected_next = _extract_next_page_url(soup, OLX_BASE_URL)
+            if detected_next:
+                next_page_url = detected_next
+                continue
+
+            if added_on_page == 0:
+                break
+
+            next_page_url = _increment_page_url(page_url)
+            if not next_page_url or _canonicalize_search_url(next_page_url) in visited_pages:
+                break
+
+            await asyncio.sleep(0.2)
+
         return listings
 
-    async def enrich_listing(self, client: httpx.AsyncClient, listing: FlatListing) -> FlatListing:
+    async def enrich_listing(self, client: SearchClient, listing: FlatListing) -> FlatListing:
         html = await _fetch_html(client, listing.link)
         soup = BeautifulSoup(html, "html.parser")
 
@@ -104,45 +135,67 @@ class OtodomScraper(FlatScraper):
 
     async def fetch_search_results(
         self,
-        client: httpx.AsyncClient,
+        client: SearchClient,
         search: SearchConfig,
         limit: int,
     ) -> list[FlatListing]:
-        html = await _fetch_html(client, search.url)
-        soup = BeautifulSoup(html, "html.parser")
         listings: list[FlatListing] = []
         seen_links: set[str] = set()
+        visited_pages: set[str] = set()
+        next_page_url: str | None = search.url
 
-        for link, title in _extract_otodom_search_candidates(soup, html):
-            canonical = _canonicalize_listing_url(link)
-            if canonical in seen_links:
-                continue
+        while next_page_url and len(visited_pages) < MAX_SEARCH_PAGES and not _should_stop(listings, limit):
+            page_url = _canonicalize_search_url(next_page_url)
+            if page_url in visited_pages:
+                break
+            visited_pages.add(page_url)
 
-            external_id = _extract_id_from_url(canonical)
-            if not external_id or not title:
-                continue
+            html = await _fetch_html(client, page_url)
+            soup = BeautifulSoup(html, "html.parser")
+            added_on_page = 0
 
-            listings.append(
-                FlatListing(
-                    source="otodom",
-                    external_id=external_id,
-                    title=title,
-                    price="",
-                    link=canonical,
+            for link, title in _extract_otodom_search_candidates(soup, html):
+                canonical = _canonicalize_listing_url(link)
+                if canonical in seen_links:
+                    continue
+
+                external_id = _extract_id_from_url(canonical)
+                if not external_id or not title:
+                    continue
+
+                listings.append(
+                    FlatListing(
+                        source="otodom",
+                        external_id=external_id,
+                        title=title,
+                        price="",
+                        link=canonical,
+                    )
                 )
-            )
-            seen_links.add(canonical)
+                seen_links.add(canonical)
+                added_on_page += 1
+
+                if _should_stop(listings, limit):
+                    break
+
             if _should_stop(listings, limit):
                 break
 
+            detected_next = _extract_next_page_url(soup, OTODOM_BASE_URL)
+            if not detected_next or added_on_page == 0:
+                break
+
+            next_page_url = detected_next
+            await asyncio.sleep(0.2)
+
         return listings
 
-    async def enrich_listing(self, client: httpx.AsyncClient, listing: FlatListing) -> FlatListing:
+    async def enrich_listing(self, client: SearchClient, listing: FlatListing) -> FlatListing:
         html = await _fetch_html(client, listing.link)
         soup = BeautifulSoup(html, "html.parser")
 
-        listing.title = _clean(soup.find("h1").get_text(
-            " ", strip=True)) if soup.find("h1") else listing.title
+        h1_tag = soup.find("h1")
+        listing.title = _clean(h1_tag.get_text(" ", strip=True)) if h1_tag else listing.title
         czynsz = _extract_otodom_czynsz(soup)
         listing.price = _join_price_parts(
             _extract_otodom_base_price(soup), czynsz)
@@ -171,7 +224,7 @@ def get_scraper_for_url(url: str) -> FlatScraper:
     raise ValueError(f"Unsupported search URL: {url}")
 
 
-async def _fetch_html(client: httpx.AsyncClient, url: str) -> str:
+async def _fetch_html(client: SearchClient, url: str) -> str:
     for attempt in range(2):
         try:
             response = await client.get(url, headers=_default_headers())
@@ -216,6 +269,53 @@ def _extract_id_from_url(url: str) -> str:
 def _canonicalize_listing_url(url: str) -> str:
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def _canonicalize_search_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+
+
+def _increment_page_url(url: str) -> str:
+    parts = urlsplit(url)
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    current_page = 1
+    for key, value in query_pairs:
+        if key != "page":
+            continue
+        try:
+            current_page = max(1, int(value))
+        except ValueError:
+            current_page = 1
+        break
+
+    next_query_pairs = [(key, value) for key, value in query_pairs if key != "page"]
+    next_query_pairs.append(("page", str(current_page + 1)))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(next_query_pairs, doseq=True), parts.fragment))
+
+
+def _extract_next_page_url(soup: BeautifulSoup, base_url: str) -> str:
+    for anchor in soup.find_all("a", href=True):
+        rel = anchor.get("rel")
+        rel_tokens: list[str] = []
+        if isinstance(rel, list):
+            rel_tokens = [str(token).casefold() for token in rel]
+        elif isinstance(rel, str):
+            rel_tokens = [token.casefold() for token in rel.split()]
+        if "next" in rel_tokens:
+            href = _string_attr(anchor.get("href"))
+            if href:
+                return urljoin(base_url, href)
+
+    for anchor in soup.find_all("a", href=True):
+        aria = _clean(_string_attr(anchor.get("aria-label"))).casefold()
+        if not aria:
+            continue
+        if "nast" in aria or "next" in aria:
+            href = _string_attr(anchor.get("href"))
+            if href:
+                return urljoin(base_url, href)
+    return ""
 
 
 def _extract_olx_search_candidates(soup: BeautifulSoup, html: str) -> list[tuple[str, str]]:
@@ -329,14 +429,14 @@ def _extract_meta_content(soup: BeautifulSoup, property_name: str) -> str:
     node = soup.find("meta", attrs={"property": property_name})
     if not isinstance(node, Tag):
         return ""
-    return _clean(node.get("content", ""))
+    return _clean(_string_attr(node.get("content")))
 
 
 def _extract_meta_description(soup: BeautifulSoup) -> str:
     node = soup.find("meta", attrs={"name": "description"})
     if not isinstance(node, Tag):
         return ""
-    return _clean(node.get("content", ""))
+    return _clean(_string_attr(node.get("content")))
 
 
 def _extract_olx_base_price(soup: BeautifulSoup, title: str) -> str:
@@ -420,14 +520,29 @@ def _extract_otodom_czynsz(soup: BeautifulSoup) -> str:
 
 def _extract_olx_published_at(soup: BeautifulSoup) -> date | None:
     text = _clean(" ".join(soup.stripped_strings))
-    if re.search(r"Odświeżono\s+dzisiaj", text, re.IGNORECASE):
+    if re.search(r"\b(dzisiaj|dodane dzisiaj|odświeżono dzisiaj)\b", text, re.IGNORECASE):
         return date.today()
-    if re.search(r"Odświeżono\s+wczoraj", text, re.IGNORECASE):
+    if re.search(r"\b(wczoraj|dodane wczoraj|odświeżono wczoraj)\b", text, re.IGNORECASE):
         return date.today() - timedelta(days=1)
+
+    relative = _extract_relative_age_date(text)
+    if relative is not None:
+        return relative
+
     match = re.search(
-        r"Odśwież.{0,40}?(\d{1,2}\s+[a-ząćęłńóśźż]+\s+\d{4})", text, re.IGNORECASE)
+        r"(?:odświeżono|dodane|opublikowano).{0,60}?(\d{1,2}\s+[a-ząćęłńóśźż]+\s+\d{4})",
+        text,
+        re.IGNORECASE,
+    )
     if not match:
-        return None
+        match = re.search(
+            r"(?:odświeżono|dodane|opublikowano).{0,60}?(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return _parse_numeric_date(match.group(1))
     return _parse_polish_date(match.group(1))
 
 
@@ -439,11 +554,49 @@ def _extract_otodom_published_at(soup: BeautifulSoup) -> date | None:
     if re.search(r"\b(wczoraj|dodane wczoraj)\b", text, re.IGNORECASE):
         return date.today() - timedelta(days=1)
 
+    relative = _extract_relative_age_date(text)
+    if relative is not None:
+        return relative
+
     match = re.search(
-        r"Ostatnia aktualizacja:\s*(\d{1,2}\.\d{1,2}\.\d{4})", text)
+        r"(?:Ostatnia aktualizacja|Data dodania|Dodane|Opublikowano):?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})",
+        text,
+        re.IGNORECASE,
+    )
     if not match:
-        return None
+        match = re.search(
+            r"(?:Ostatnia aktualizacja|Data dodania|Dodane|Opublikowano):?\s*(\d{1,2}\s+[a-ząćęłńóśźż]+\s+\d{4})",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        return _parse_polish_date(match.group(1))
+
     return _parse_numeric_date(match.group(1))
+
+
+def _extract_relative_age_date(text: str) -> date | None:
+    text = text.casefold()
+    today = date.today()
+
+    if re.search(r"\b\d+\s+(?:min|minute|minut|minuty|minutę|min)\s+temu\b", text):
+        return today
+    if re.search(r"\b\d+\s+(?:godz|godzina|godzinę|godziny|godzin)\s+temu\b", text):
+        return today
+
+    match = re.search(r"\b(\d+)\s+(?:dzień|dni)\s+temu\b", text)
+    if not match:
+        match = re.search(r"\b(\d+)\s+(?:tydzień|tygodnie|tygodni)\s+temu\b", text)
+        if match:
+            return today - timedelta(days=int(match.group(1)) * 7)
+
+        match = re.search(r"\b(\d+)\s+(?:miesiąc|miesiące|miesięcy)\s+temu\b", text)
+        if match:
+            return today - timedelta(days=int(match.group(1)) * 30)
+        return None
+
+    return today - timedelta(days=int(match.group(1)))
 
 
 def _extract_section_text(soup: BeautifulSoup, heading_text: str) -> str:
@@ -499,7 +652,7 @@ def _extract_text_after_label(soup: BeautifulSoup, label: str) -> str:
             if text:
                 texts.append(text)
                 break
-        next_node = next_node.next_sibling
+        next_node = getattr(next_node, 'next_sibling', None)
     return texts[0] if texts else ""
 
 
@@ -507,10 +660,10 @@ def _extract_photo_urls(soup: BeautifulSoup, title: str) -> list[str]:
     urls: list[str] = []
     title_normalized = title.casefold()
     for image in soup.find_all("img", src=True):
-        src = image.get("src", "")
+        src = _string_attr(image.get("src"))
         if "apollo.olxcdn.com" not in src:
             continue
-        alt = _clean(image.get("alt", ""))
+        alt = _clean(_string_attr(image.get("alt")))
         if alt and title_normalized and title_normalized not in alt.casefold() and "pełny obrazek" not in alt.casefold():
             continue
         if src not in urls:
@@ -518,12 +671,22 @@ def _extract_photo_urls(soup: BeautifulSoup, title: str) -> list[str]:
     return urls
 
 
-def _clean(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
+def _string_attr(value: object | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(str(item) for item in value)
+    return str(value)
+
+
+def _clean(text: object | None) -> str:
+    if text is None:
+        return ""
+    return re.sub(r"\s+", " ", str(text)).strip()
 
 
 def _parse_numeric_date(value: str) -> date | None:
-    match = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", value.strip())
+    match = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", value.strip())
     if not match:
         return None
     day, month, year = (int(part) for part in match.groups())
@@ -541,18 +704,37 @@ def _parse_polish_date(value: str) -> date | None:
 
     month_names = {
         "stycznia": 1,
+        "styczen": 1,
+        "styczeń": 1,
         "lutego": 2,
+        "luty": 2,
         "marca": 3,
+        "marzec": 3,
         "kwietnia": 4,
+        "kwiecien": 4,
+        "kwiecień": 4,
         "maja": 5,
+        "maj": 5,
         "czerwca": 6,
+        "czerwiec": 6,
         "lipca": 7,
+        "lipiec": 7,
         "sierpnia": 8,
+        "sierpien": 8,
+        "sierpień": 8,
+        "wrzesnia": 9,
         "września": 9,
+        "wrzesien": 9,
+        "wrzesień": 9,
         "pazdziernika": 10,
         "października": 10,
+        "pazdziernik": 10,
+        "październik": 10,
         "listopada": 11,
+        "listopad": 11,
         "grudnia": 12,
+        "grudzien": 12,
+        "grudzień": 12,
     }
 
     day = int(match.group(1))
