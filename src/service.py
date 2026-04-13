@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date, timedelta
 
 import httpx
 
 from config import Settings
+from fetchers import CamoufoxSearchClient, HttpxSearchClient, SearchClient
 from messages import saved_message, start_message, status_message
 from models import FlatListing, SearchConfig
 from scrapers import FlatScraper, get_scraper_for_url
@@ -27,21 +29,18 @@ class FlatMonitorService:
         )
 
     async def run(self) -> None:
+        search_client: SearchClient = CamoufoxSearchClient() if self._settings.camoufox_enable else HttpxSearchClient()
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    connect=10.0, read=30.0, write=30.0, pool=30.0),
-                follow_redirects=True,
-            ) as client:
-                await asyncio.gather(
-                    self._poll_searches_loop(client),
-                    self._poll_telegram_updates_loop(),
-                )
+            await asyncio.gather(
+                self._poll_searches_loop(search_client),
+                self._poll_telegram_updates_loop(),
+            )
         finally:
+            await search_client.aclose()
             await self._telegram.close()
             self._storage.close()
 
-    async def _poll_searches_loop(self, client: httpx.AsyncClient) -> None:
+    async def _poll_searches_loop(self, client: SearchClient) -> None:
         while True:
             await self._poll_once(client)
             await asyncio.sleep(self._settings.poll_interval_seconds)
@@ -112,7 +111,7 @@ class FlatMonitorService:
         self._storage.replace_searches(chat_id, searches)
         await self._telegram.send_message(chat_id, saved_message(searches))
 
-    async def _poll_once(self, client: httpx.AsyncClient) -> None:
+    async def _poll_once(self, client: SearchClient) -> None:
         searches = self._storage.list_searches()
         if not searches:
             return
@@ -132,13 +131,23 @@ class FlatMonitorService:
 
     async def _process_listing(
         self,
-        client: httpx.AsyncClient,
+        client: SearchClient,
         scraper: FlatScraper,
         chat_id: str,
         listing: FlatListing,
     ) -> str:
         try:
             enriched = await scraper.enrich_listing(client, listing)
+            if _is_listing_stale(enriched.published_at, self._settings.max_listing_age_days):
+                LOGGER.info(
+                    "Skipping stale listing chat=%s source=%s id=%s published_at=%s",
+                    chat_id,
+                    enriched.source,
+                    enriched.external_id,
+                    enriched.published_at,
+                )
+                self._remember_listing(chat_id, enriched)
+                return "stale"
             await self._telegram.send_listing(chat_id, enriched)
             self._remember_listing(chat_id, enriched)
             return "posted"
@@ -151,11 +160,11 @@ class FlatMonitorService:
 
     async def _process_listings_fast(
         self,
-        client: httpx.AsyncClient,
+        client: SearchClient,
         scraper: FlatScraper,
         chat_id: str,
         fresh: list[FlatListing],
-    ) -> tuple[int, int, int]:
+    ) -> tuple[int, int, int, int]:
         semaphore = asyncio.Semaphore(self._settings.max_parallel_enrichments)
 
         async def run_one(listing: FlatListing) -> str:
@@ -164,13 +173,14 @@ class FlatMonitorService:
 
         outcomes = await asyncio.gather(*(run_one(listing) for listing in fresh))
         posted = outcomes.count("posted")
+        stale = outcomes.count("stale")
         timeouts = outcomes.count("timeout")
         errors = outcomes.count("error")
-        return posted, timeouts, errors
+        return posted, stale, timeouts, errors
 
     async def _handle_search(
         self,
-        client: httpx.AsyncClient,
+        client: SearchClient,
         scraper: FlatScraper,
         search: SearchConfig,
     ) -> None:
@@ -206,17 +216,18 @@ class FlatMonitorService:
 
         LOGGER.info("Found %s unseen flats for chat=%s url=%s",
                     len(fresh), search.chat_id, search.url)
-        posted_count, timeout_count, error_count = await self._process_listings_fast(
+        posted_count, stale_count, timeout_count, error_count = await self._process_listings_fast(
             client,
             scraper,
             search.chat_id,
             fresh,
         )
         LOGGER.info(
-            "Search summary chat=%s url=%s: posted=%s timeouts=%s errors=%s",
+            "Search summary chat=%s url=%s: posted=%s stale=%s timeouts=%s errors=%s",
             search.chat_id,
             search.url,
             posted_count,
+            stale_count,
             timeout_count,
             error_count,
         )
@@ -230,3 +241,10 @@ class FlatMonitorService:
             listing.title,
             listing.link,
         )
+
+
+def _is_listing_stale(published_at: date | None, max_listing_age_days: int) -> bool:
+    if max_listing_age_days <= 0 or published_at is None:
+        return False
+    cutoff = date.today() - timedelta(days=max_listing_age_days)
+    return published_at < cutoff
