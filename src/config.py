@@ -37,8 +37,10 @@ class Settings:
     max_parallel_enrichments: int
     telegram_poll_timeout_seconds: int
     telegram_read_timeout_seconds: int
+    camoufox_enable: bool
     max_listings_per_search: int
     max_new_listings_per_cycle: int
+    max_listing_age_days: int
     max_photos_per_message: int
     seed_existing_on_start: bool
     state_db_path: Path
@@ -63,8 +65,10 @@ def load_settings() -> Settings:
         max_parallel_enrichments=max(1, _env_int("MAX_PARALLEL_ENRICHMENTS", 4)),
         telegram_poll_timeout_seconds=_env_int("TELEGRAM_POLL_TIMEOUT_SECONDS", 20),
         telegram_read_timeout_seconds=_env_int("TELEGRAM_READ_TIMEOUT_SECONDS", 65),
+        camoufox_enable=_env_bool("CAMOUFOX_ENABLE", False),
         max_listings_per_search=_env_int("MAX_LISTINGS_PER_SEARCH", 25),
         max_new_listings_per_cycle=_env_int("MAX_NEW_LISTINGS_PER_CYCLE", 6),
+        max_listing_age_days=max(0, _env_int("MAX_LISTING_AGE_DAYS", 3)),
         max_photos_per_message=_env_int("MAX_PHOTOS_PER_MESSAGE", 5),
         seed_existing_on_start=_env_bool("SEED_EXISTING_ON_START", True),
         state_db_path=state_db_path,
