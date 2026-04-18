@@ -46,62 +46,39 @@ class OlxScraper(FlatScraper):
     ) -> list[FlatListing]:
         listings: list[FlatListing] = []
         seen_links: set[str] = set()
-        visited_pages: set[str] = set()
-        next_page_url: str | None = search.url
+        page_url = _canonicalize_search_url(search.url)
+        html = await _fetch_html(client, page_url)
+        soup = BeautifulSoup(html, "html.parser")
 
-        while next_page_url and len(visited_pages) < MAX_SEARCH_PAGES and not _should_stop(listings, limit):
-            page_url = _canonicalize_search_url(next_page_url)
-            if page_url in visited_pages:
-                break
-            visited_pages.add(page_url)
+        # OLX supports newest-first ordering in the search URL. Sticking to page 1
+        # makes notifications faster and avoids losing fresh results when later
+        # pagination requests get throttled or fail.
+        for link, title in _extract_olx_search_candidates(soup, html):
+            canonical = _canonicalize_listing_url(link)
+            if urlparse(canonical).netloc not in {"www.olx.pl", "olx.pl"}:
+                continue
+            if canonical in seen_links:
+                continue
 
-            html = await _fetch_html(client, page_url)
-            soup = BeautifulSoup(html, "html.parser")
-            added_on_page = 0
+            external_id = _extract_id_from_url(
+                canonical) or _extract_olx_external_id(canonical)
+            title = title or _fallback_title_from_listing_url(canonical)
+            if not external_id or not title:
+                continue
 
-            for link, title in _extract_olx_search_candidates(soup, html):
-                canonical = _canonicalize_listing_url(link)
-                if urlparse(canonical).netloc not in {"www.olx.pl", "olx.pl"}:
-                    continue
-                if canonical in seen_links:
-                    continue
-
-                external_id = _extract_id_from_url(
-                    canonical) or _extract_olx_external_id(canonical)
-                if not external_id or not title:
-                    continue
-
-                listings.append(
-                    FlatListing(
-                        source="olx",
-                        external_id=external_id,
-                        title=title,
-                        price="",
-                        link=canonical,
-                    )
+            listings.append(
+                FlatListing(
+                    source="olx",
+                    external_id=external_id,
+                    title=title,
+                    price="",
+                    link=canonical,
                 )
-                seen_links.add(canonical)
-                added_on_page += 1
-
-                if _should_stop(listings, limit):
-                    break
+            )
+            seen_links.add(canonical)
 
             if _should_stop(listings, limit):
                 break
-
-            detected_next = _extract_next_page_url(soup, OLX_BASE_URL)
-            if detected_next:
-                next_page_url = detected_next
-                continue
-
-            if added_on_page == 0:
-                break
-
-            next_page_url = _increment_page_url(page_url)
-            if not next_page_url or _canonicalize_search_url(next_page_url) in visited_pages:
-                break
-
-            await asyncio.sleep(0.2)
 
         return listings
 
@@ -160,6 +137,7 @@ class OtodomScraper(FlatScraper):
                     continue
 
                 external_id = _extract_id_from_url(canonical)
+                title = title or _fallback_title_from_listing_url(canonical)
                 if not external_id or not title:
                     continue
 
@@ -264,6 +242,14 @@ def _should_stop(listings: list[FlatListing], limit: int) -> bool:
 def _extract_id_from_url(url: str) -> str:
     match = re.search(r"-(ID[\w]+)(?:\.html)?", url)
     return match.group(1) if match else ""
+
+
+def _fallback_title_from_listing_url(url: str) -> str:
+    slug = urlsplit(url).path.rstrip("/").split("/")[-1]
+    slug = re.sub(r"\.html$", "", slug, flags=re.IGNORECASE)
+    slug = re.sub(r"-CID\d+", "", slug, flags=re.IGNORECASE)
+    slug = re.sub(r"-ID[\w]+$", "", slug, flags=re.IGNORECASE)
+    return _clean(slug.replace("-", " "))
 
 
 def _canonicalize_listing_url(url: str) -> str:
