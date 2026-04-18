@@ -8,7 +8,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/appts-retrieval
 EnvironmentFile=/opt/appts-retrieval/.env
-ExecStart=/opt/appts-retrieval/venv/bin/python -m flats_retrieval
+ExecStart=/opt/appts-retrieval/venv/bin/python -m appts_retrieval
 Restart=always
 RestartSec=10
 
