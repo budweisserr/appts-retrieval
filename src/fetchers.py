@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import httpx
 from importlib import import_module
 from typing import Protocol
@@ -28,8 +29,9 @@ class HttpxSearchClient:
 
 
 class CamoufoxSearchClient:
-    def __init__(self, timeout_seconds: float = 30.0) -> None:
+    def __init__(self, timeout_seconds: float = 30.0, max_attempts: int = 3) -> None:
         self._timeout_seconds = timeout_seconds
+        self._max_attempts = max(1, max_attempts)
         self._camoufox_cm = None
         self._browser = None
 
@@ -52,36 +54,46 @@ class CamoufoxSearchClient:
     async def get(self, url: str | httpx.URL, headers: dict[str, str] | None = None) -> httpx.Response:
         target_url = str(url)
         browser = await self._ensure_browser()
-        page = await browser.new_page()
-        try:
-            if headers:
-                await page.set_extra_http_headers(headers)
+        wait_strategies = ["domcontentloaded", "load", "commit"]
+        timeout_ms = int(self._timeout_seconds * 1000)
+        last_error: Exception | None = None
 
-            response = await page.goto(
-                target_url,
-                wait_until="domcontentloaded",
-                timeout=int(self._timeout_seconds * 1000),
-            )
+        for attempt in range(self._max_attempts):
+            page = await browser.new_page()
             try:
-                await page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                pass
+                if headers:
+                    await page.set_extra_http_headers(headers)
 
-            html = await page.content()
-            status_code = 200
-            final_url = page.url or target_url
-            if response is not None:
-                status_code = response.status
-                final_url = response.url
+                response = await page.goto(
+                    target_url,
+                    wait_until=wait_strategies[min(attempt, len(wait_strategies) - 1)],
+                    timeout=timeout_ms,
+                )
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
 
-            request = httpx.Request("GET", final_url, headers=headers)
-            return httpx.Response(status_code=status_code, request=request, text=html)
-        except Exception as exc:
-            if exc.__class__.__name__ == "TimeoutError":
-                raise httpx.TimeoutException(str(exc)) from exc
-            raise
-        finally:
-            await page.close()
+                html = await page.content()
+                status_code = 200
+                final_url = page.url or target_url
+                if response is not None:
+                    status_code = response.status
+                    final_url = response.url
+
+                request = httpx.Request("GET", final_url, headers=headers)
+                return httpx.Response(status_code=status_code, request=request, text=html)
+            except Exception as exc:
+                if not _is_playwright_timeout(exc):
+                    raise
+                last_error = exc
+                if attempt < self._max_attempts - 1:
+                    await asyncio.sleep(0.5)
+                    continue
+            finally:
+                await page.close()
+
+        raise httpx.TimeoutException(str(last_error)) from last_error
 
     async def aclose(self) -> None:
         if self._camoufox_cm is None:
@@ -89,3 +101,7 @@ class CamoufoxSearchClient:
         await self._camoufox_cm.__aexit__(None, None, None)
         self._camoufox_cm = None
         self._browser = None
+
+
+def _is_playwright_timeout(exc: Exception) -> bool:
+    return exc.__class__.__name__ == "TimeoutError"
