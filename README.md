@@ -41,7 +41,7 @@ pdm run appts-retrieval
 or:
 
 ```bash
-pdm run python -m appt_retrieval
+pdm run python -m appts_retrieval
 ```
 
 ## Telegram usage
@@ -79,7 +79,7 @@ You can tune further in `.env`, but lower intervals increase request pressure an
 - `MAX_PARALLEL_ENRICHMENTS` (default: `4`)
 - `TELEGRAM_POLL_TIMEOUT_SECONDS` (default: `20`)
 - `TELEGRAM_READ_TIMEOUT_SECONDS` (default: `65`)
-- `CAMOUFOX_ENABLE` (default: `0`; set `1` to fetch pages via Camoufox browser instead of httpx)
+- `CAMOUFOX_ENABLE` (default: `0`; set `1` to enable fallback to Camoufox when search request returns `405`)
 - `MAX_LISTINGS_PER_SEARCH` (default: `25`, `0` means no cap)
 - `MAX_NEW_LISTINGS_PER_CYCLE` (default: `6`, `0` means no cap)
 - `MAX_LISTING_AGE_DAYS` (default: `3`, skip listings older than this; `0` disables age filtering)
