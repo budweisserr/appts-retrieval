@@ -49,25 +49,31 @@ class TelegramClient:
 
     async def send_listing(self, chat_id: str, listing: FlatListing) -> None:
         caption = self._build_caption(listing)
-        photos = listing.photos[: self._max_photos_per_message]
+        photos = self._limit_photos(listing.photos)
 
         if photos:
-            media = []
-            for index, photo_url in enumerate(photos):
-                item = {"type": "photo", "media": photo_url}
-                if index == 0:
-                    item["caption"] = caption
-                    item["parse_mode"] = "HTML"
-                media.append(item)
+            photo_chunks = [photos[index: index + 10]
+                            for index in range(0, len(photos), 10)]
 
-            response = await self._client.post(
-                "sendMediaGroup",
-                data={
-                    "chat_id": chat_id,
-                    "media": json.dumps(media, ensure_ascii=False),
-                },
-            )
-            if response.is_success:
+            for chunk_index, chunk in enumerate(photo_chunks):
+                media = []
+                for photo_index, photo_url in enumerate(chunk):
+                    item = {"type": "photo", "media": photo_url}
+                    if chunk_index == 0 and photo_index == 0:
+                        item["caption"] = caption
+                        item["parse_mode"] = "HTML"
+                    media.append(item)
+
+                response = await self._client.post(
+                    "sendMediaGroup",
+                    data={
+                        "chat_id": chat_id,
+                        "media": json.dumps(media, ensure_ascii=False),
+                    },
+                )
+                if not response.is_success:
+                    break
+            else:
                 return
 
         response = await self._client.post(
@@ -99,3 +105,8 @@ class TelegramClient:
 
         lines.append(f'<a href="{escaped_link}">Link</a>')
         return "\n".join(lines)
+
+    def _limit_photos(self, photos: list[str]) -> list[str]:
+        if self._max_photos_per_message <= 0:
+            return photos
+        return photos[: self._max_photos_per_message]
