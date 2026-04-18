@@ -29,20 +29,23 @@ class FlatMonitorService:
         )
 
     async def run(self) -> None:
-        search_client: SearchClient = CamoufoxSearchClient() if self._settings.camoufox_enable else HttpxSearchClient()
+        search_client: SearchClient = HttpxSearchClient()
+        camoufox_client: SearchClient | None = CamoufoxSearchClient() if self._settings.camoufox_enable else None
         try:
             await asyncio.gather(
-                self._poll_searches_loop(search_client),
+                self._poll_searches_loop(search_client, camoufox_client),
                 self._poll_telegram_updates_loop(),
             )
         finally:
             await search_client.aclose()
+            if camoufox_client is not None:
+                await camoufox_client.aclose()
             await self._telegram.close()
             self._storage.close()
 
-    async def _poll_searches_loop(self, client: SearchClient) -> None:
+    async def _poll_searches_loop(self, client: SearchClient, camoufox_client: SearchClient | None) -> None:
         while True:
-            await self._poll_once(client)
+            await self._poll_once(client, camoufox_client)
             await asyncio.sleep(self._settings.poll_interval_seconds)
 
     async def _poll_telegram_updates_loop(self) -> None:
@@ -61,13 +64,15 @@ class FlatMonitorService:
                 continue
 
             for update in updates:
-                offset = max(offset, update["update_id"] + 1)
-                self._storage.set_offset(offset)
                 try:
                     await self._handle_update(update)
                 except Exception:
                     LOGGER.exception(
                         "Failed to process Telegram update %s", update.get("update_id"))
+                    await asyncio.sleep(2)
+                    break
+                offset = max(offset, update["update_id"] + 1)
+                self._storage.set_offset(offset)
 
     async def _handle_update(self, update: dict) -> None:
         message = update.get("message") or update.get("edited_message")
@@ -111,7 +116,7 @@ class FlatMonitorService:
         self._storage.replace_searches(chat_id, searches)
         await self._telegram.send_message(chat_id, saved_message(searches))
 
-    async def _poll_once(self, client: SearchClient) -> None:
+    async def _poll_once(self, client: SearchClient, camoufox_client: SearchClient | None) -> None:
         searches = self._storage.list_searches()
         if not searches:
             return
@@ -122,7 +127,7 @@ class FlatMonitorService:
             async with semaphore:
                 scraper = get_scraper_for_url(search.url)
                 try:
-                    await self._handle_search(client, scraper, search)
+                    await self._handle_search(client, camoufox_client, scraper, search)
                 except Exception:
                     LOGGER.exception(
                         "Search failed for chat=%s url=%s", search.chat_id, search.url)
@@ -181,14 +186,33 @@ class FlatMonitorService:
     async def _handle_search(
         self,
         client: SearchClient,
+        camoufox_client: SearchClient | None,
         scraper: FlatScraper,
         search: SearchConfig,
     ) -> None:
-        listings = await scraper.fetch_search_results(
-            client,
-            search,
-            self._settings.max_listings_per_search,
-        )
+        try:
+            listings = await scraper.fetch_search_results(
+                client,
+                search,
+                self._settings.max_listings_per_search,
+            )
+        except httpx.HTTPStatusError as exc:
+            if (
+                exc.response.status_code == 405
+                and camoufox_client is not None
+            ):
+                LOGGER.warning(
+                    "Search got 405, retrying with Camoufox chat=%s url=%s",
+                    search.chat_id,
+                    search.url,
+                )
+                listings = await scraper.fetch_search_results(
+                    camoufox_client,
+                    search,
+                    self._settings.max_listings_per_search,
+                )
+            else:
+                raise
 
         if self._settings.seed_existing_on_start and not search.is_seeded:
             for listing in listings:
